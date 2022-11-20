@@ -1,0 +1,96 @@
+---
+title: "Customer Churn Analysis"
+author: "yohanesegipratama"
+date: "`r Sys.Date()`"
+output: 
+    rmdformats::material
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Masalah Bisnis
+Churn rate adalah indikator yang efisien untuk perusahaan berbasis langganan. Mengidentifikasi pelanggan yang tidak puas dengan solusi yang diberikan memungkinkan bisnis mempelajari titik lemah produk atau rencana penetapan harga, masalah operasi, dan preferensi serta harapan pelanggan untuk mengurangi alasan churn secara proaktif.
+pada 
+
+Dataset dari Telco terdiri dari 7.043 catatan dengan dua puluh atribut yang dibagi menjadi dua kategori: data demografis pelanggan dan informasi yang terkait dengan akun nirkabel mereka. Fitur demografis mencakup jenis kelamin pelanggan, apakah mereka memiliki pasangan, tanggungan, dan berusia 65 tahun ke atas. Fitur yang terkait dengan informasi akun mereka termasuk berapa lama pelanggan telah bersama Telco, tagihan bulanan dan total mereka, kontrak yang dimiliki setiap pelanggan (bulan-ke-bulan, satu tahun, atau dua tahun), dan jenis telepon, internet , dan layanan TV yang mereka miliki. Variabel target kami untuk penelitian ini adalah Churn, indikator biner yang mewakili apakah pelanggan pergi atau tidak dalam sebulan terakhir.
+
+Ada 11 pelanggan dengan TotalCharges yang hilang. Karena jumlahnya cukup kecil, pengamatan ini akan dihapus sebelum memulai analisis, menyisakan 7.032 pelanggan dalam kumpulan data. Selain itu, beberapa variabel kategori Ya/Tidak berisi grup tambahan yang menunjukkan bahwa pelanggan tidak memiliki layanan telepon atau internet. Ini dikodekan ulang dan digabungkan dengan nilai No
+
+
+# Import Library dan Load Dataset
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(corrgram)
+library(caret)
+library(randomForest)
+library(xgboost)
+library(keras)
+library(tidyverse)
+
+
+## load data
+df  <- read.csv("data_input/WA_Fn-UseC_-Telco-Customer-Churn.csv")
+head(df)
+```
+
+
+# Data Preprocessing
+
+```{r}
+str(df)
+```
+
+
+```{r}
+df$SeniorCitizen <- as.factor(df$SeniorCitizen)
+```
+```{r}
+churn_data_tbl <- df %>% 
+  select(-customerID) %>%
+  drop_na()
+```
+
+```{r}
+dummies <- dummyVars("~ .", data = churn_data_tbl %>% select(-Churn))
+predict(dummies, churn_data_tbl %>% select(-Churn)) %>% as.data.frame() -> df_features
+
+```
+```{r}
+df_features %>% 
+  mutate_all(function(x) {(x - min(x)) / (max(x) - min(x))}) %>% 
+  mutate(Churn = case_when(churn_data_tbl$Churn == "Yes" ~ 1, TRUE ~ 0)) -> df_final
+
+```
+
+
+# Exploratory Data Analysis
+
+# Train Test Split
+```{r}
+set.seed(1)
+id <- createDataPartition(df_final$Churn, p = 0.7, list = FALSE)
+train <- df_final[id, ]
+test <- df_final[-id, ]
+
+
+x_train_tbl <- train %>% 
+  select(-Churn) %>% 
+  as.matrix()
+
+n <- ncol(x_train_tbl)
+
+y_train_vec <- train %>% pull(Churn)
+
+x_test_tbl <- test %>% 
+  select(-Churn) %>% 
+  as.matrix()
+
+y_test_vec <- test %>% pull(Churn)
+```
+
+# Modelling
+## Artificial Neural Network

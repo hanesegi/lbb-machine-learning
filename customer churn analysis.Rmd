@@ -1,0 +1,279 @@
+---
+title: "Customer Churn Analysis"
+author: "yohanesegipratama"
+date: "`r Sys.Date()`"
+output: 
+    rmdformats::material
+    
+    
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Masalah Bisnis
+Churn rate adalah indikator yang efisien untuk perusahaan berbasis langganan. Mengidentifikasi pelanggan yang tidak puas dengan solusi yang diberikan memungkinkan bisnis mempelajari titik lemah produk atau rencana penetapan harga, masalah operasi, dan preferensi serta harapan pelanggan untuk mengurangi alasan churn secara proaktif.
+pada 
+
+Dataset dari Telco terdiri dari 7.043 catatan dengan dua puluh atribut yang dibagi menjadi dua kategori: data demografis pelanggan dan informasi yang terkait dengan akun nirkabel mereka. Fitur demografis mencakup jenis kelamin pelanggan, apakah mereka memiliki pasangan, tanggungan, dan berusia 65 tahun ke atas. Fitur yang terkait dengan informasi akun mereka termasuk berapa lama pelanggan telah bersama Telco, tagihan bulanan dan total mereka, kontrak yang dimiliki setiap pelanggan (bulan-ke-bulan, satu tahun, atau dua tahun), dan jenis telepon, internet , dan layanan TV yang mereka miliki. Variabel target kami untuk penelitian ini adalah Churn, indikator biner yang mewakili apakah pelanggan pergi atau tidak dalam sebulan terakhir.
+
+Ada 11 pelanggan dengan TotalCharges yang hilang. Karena jumlahnya cukup kecil, pengamatan ini akan dihapus sebelum memulai analisis, menyisakan 7.032 pelanggan dalam kumpulan data. Selain itu, beberapa variabel kategori Ya/Tidak berisi grup tambahan yang menunjukkan bahwa pelanggan tidak memiliki layanan telepon atau internet. Ini dikodekan ulang dan digabungkan dengan nilai No
+
+
+# Import Library dan Load Dataset
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(corrgram)
+library(caret)
+library(neuralnet)
+library(xgboost)
+library(corrplot)
+library(rpart)
+library(rpart.plot)
+library(tidyverse)
+library(e1071)
+library(caret)
+library(ROCR)
+library(partykit)
+library(rsample)
+library(randomForest)
+library(inspectdf)
+
+
+## load data
+df  <- read.csv("data_input/WA_Fn-UseC_-Telco-Customer-Churn.csv", stringsAsFactors = TRUE)
+head(df)
+```
+
+
+# Data Preprocessing
+
+```{r}
+glimpse(df)
+```
+
+```{r}
+sapply(df, function(x) sum(is.na(x)))
+```
+
+```{r}
+# handling missing value
+df <- df %>% 
+  select(-c(customerID)) %>% 
+  na.omit()
+
+df$SeniorCitizen <- factor(df$SeniorCitizen,
+                                 levels = c("0", "1"), 
+                                 labels = c("No", "Yes"))
+```
+```{r}
+missing<- df %>% summarize_all(funs(sum(is.na(.))))
+
+missing %>% gather(key ="variables", value ="missing_values") %>%
+    ggplot(aes(x=variables, y=missing_values)) +
+    geom_bar(stat="identity", fill = "blue") + 
+    coord_flip() + ggtitle("Visualisasi Missing Value")
+
+```
+
+# Exploratory Data Analysis
+
+## perbandingan jumlah churn yes dan no
+```{r}
+ggplot(data = df , aes(x = Churn,fill = Churn)) + 
+  geom_bar()  + 
+  geom_text(stat = 'count' , aes(label = paste("n = " , formatC(..count..))),vjust = -0.5) +   
+  theme_minimal() + 
+  ggtitle("Perbandingan jumlah customer churn") + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+* insight
+berdasarkan visualisasi diatas diketahui, perbandingan class target imbalanced maka kita akan lakukan upsampling supaya data antar kelas menjadi imbang 
+
+
+
+```{r}
+ggplot(data = df, aes(x = Churn,fill = InternetService)) + 
+  geom_bar(stat = "count",position = position_dodge()) + 
+  geom_text(stat = "count" , aes(label = paste("n = " , formatC(..count..))),
+            vjust = -0.5 , position= position_dodge(0.9)) + 
+  ggtitle("Customer Churn by Internet Services") + theme_minimal() + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+* insight
+
+# Train test split
+```{r}
+
+set.seed(100)
+# splitting data
+idx <- initial_split(data = df,
+                     prop = 0.8,
+                     strata = "Churn")
+data_train <- training(idx)
+data_test <- testing(idx)
+```
+
+```{r}
+set.seed(100)
+data_train_upsampling <- upSample(x = data_train %>% select(-Churn),
+                              y = data_train$Churn, 
+                              yname = "Churn")
+
+table(data_train_upsampling$Churn)
+```
+```{r}
+prop.table(table(data_train_upsampling$Churn))
+```
+
+
+# Modelling 1
+## naive bayes
+
+```{r}
+
+model_nb <- naiveBayes(Churn ~., data = data_train_upsampling, laplace = 1)
+```
+
+
+```{r}
+pred_naive <- predict(model_nb, data_test, type = "class")
+```
+
+
+```{r}
+conf_nb <- confusionMatrix(pred_naive, reference = data_test$Churn, positive = "Yes")
+conf_nb
+```
+
+* insight
+Dalam hal ini, kami ingin mendapatkan nilai metrik penarikan atau Sensitivitas maksimum sehingga model kami dapat mendeteksi sebanyak mungkin pelanggan yang benar-benar churn. Dari hasil Confusionmatrix diatas didapatkan nilai Sensitivity 83,78% dengan Accuracy 69,76%.
+
+```{r}
+prob_test <- predict(model_nb, data_test, type = "raw")
+head(prob_test)
+```
+
+
+# modelling 2
+## random forest
+
+```{r}
+set.seed(100)
+ctrl <- trainControl(method = "repeatedcv",
+                      number = 5,
+                      repeats = 3)
+model_forest <- train(Churn ~ .,
+                 data = data_train_upsampling,
+                 method = "rf",
+                 trControl = ctrl)
+saveRDS(model_forest, "model_forest.rds")
+```
+```{r}
+model_forest <- readRDS("model_forest.rds")
+model_forest
+```
+* insight
+
+# Modelling 3
+## Xgboost
+
+```{r}
+set.seed(123)
+train_ctr <- trainControl(method = 'cv', number = 10,
+                          classProbs = TRUE,
+                          summaryFunction = twoClassSummary
+                          )
+xgb_model <- train(Churn ~ ., method = "xgbTree",
+                  data = data_train,
+                  trControl = train_ctr,
+                  tuneLength = 5,
+                  metric = "ROC")
+```
+```{r}
+summary(xgb_model)
+```
+
+```{r}
+xgb_model
+```
+
+# Modelling 4
+## Decision Tree
+```{r}
+set.seed(100)
+model_dt <- ctree(Churn ~ ., data = data_train_upsampling)
+```
+```{r}
+plot(model_dt, type = "simple")
+```
+
+
+# Evaluasi Model
+## naive bayes
+```{r}
+prob_test <- predict(model_nb, data_test, type = "raw")
+head(prob_test)
+```
+
+
+```{r}
+perf <- performance(prediction.obj = pred_rocr, measure = "tpr", x.measure = "fpr")
+```
+
+```{r}
+plot(perf)
+```
+
+```{r}
+auc <- performance(pred_rocr, "auc")
+
+auc@y.values
+```
+
+## xgboost
+
+```{r}
+perf_xgb <- performance(prediction.obj = pred_rocr_xgb, measure = "tpr", x.measure = "fpr")
+```
+```{r}
+plot(perf_xgb)
+```
+## Decision Tree
+```{r}
+pred_dt <- predict(model_dt, data_test, type = "response")
+```
+```{r}
+conf_dt <- confusionMatrix(as.factor(pred_dt), data_test$Churn, positive = "Yes")
+conf_dt
+```
+
+## random forest
+```{r}
+model_forest$finalModel
+```
+
+```{r}
+plot(varImp(model_forest))
+```
+
+```{r}
+pred <- predict(model_forest, newdata = data_test, type = "prob")
+pred$result <- as.factor(ifelse(pred$Yes > 0.45, "Yes", "No"))
+conf_rf <- confusionMatrix(as.factor(pred$result), as.factor(data_test$Churn), positive = "Yes")
+conf_rf
+```
+
+# Kesimpulan
+berdasarkan hasil perbandingan model machine learning
+naive bayes, random forest, xgboost, decisiont tree
+diketahui model terbaik adalah random forest dengan nilai akurasi 75% dan nilai specificity terbaik pada model decision tree
+
+rpubs ini masih tahap pengembangan lagi,
